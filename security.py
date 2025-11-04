@@ -6,12 +6,14 @@ import time
 from collections import deque
 from typing import Set
 
+
 class SecurityException(Exception):
     def __init__(self, message: str, status_code: int = 403, code: str = "security_error"):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.code = code
+
 
 class RateLimiter:
     def __init__(self, max_requests: int = 180, window_seconds: int = 60):
@@ -34,6 +36,7 @@ class RateLimiter:
                 )
             bucket.append(now)
 
+
 class SecurityManager:
     def __init__(self):
         allowed_ips = os.environ.get("ALLOWED_PROXY_IPS", "")
@@ -45,10 +48,15 @@ class SecurityManager:
         self.rate_limiter = RateLimiter(max_requests=max_requests, window_seconds=window_seconds)
         self.require_https = os.environ.get("REQUIRE_HTTPS", "true").lower() == "true"
 
+        default_optional = {"/", "/health", "/v1/generate-key", "/v1/models", "/v1/chat/completions"}
+        optional_env = os.environ.get("SIGNATURE_OPTIONAL_PATHS", "")
+        env_optional = {p.strip() for p in optional_env.split(",") if p.strip()}
+        self.signature_optional_paths = default_optional.union(env_optional)
+
     def enforce(self, flask_request):
         self._enforce_https(flask_request)
         self._enforce_ip_allowlist(flask_request)
-        if self.signing_secret:
+        if self.signing_secret and flask_request.path not in self.signature_optional_paths:
             self._verify_signature(flask_request)
         client_identifier = self._derive_client_identifier(flask_request)
         self.rate_limiter.check(client_identifier)
@@ -98,5 +106,6 @@ class SecurityManager:
         if forwarded_for:
             return forwarded_for.split(",")[0].strip()
         return flask_request.remote_addr or "anonymous"
+
 
 security_manager = SecurityManager()
