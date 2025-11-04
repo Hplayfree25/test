@@ -18,26 +18,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("opengen_proxy")
 
-PUBLIC_ENDPOINT_URL = os.environ.get("PUBLIC_ENDPOINT_URL", "https://proxy.example.com/v1").rstrip("/")
-TARGET_BASE_URL = os.environ.get("TARGET_BASE_URL", "https://api.lhyb.dpdns.org/v1")
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+try:
+    TARGET_BASE_URL = os.environ["TARGET_BASE_URL"].rstrip("/")
+    INTERNAL_API_KEY = os.environ["INTERNAL_API_KEY"]
+except KeyError as exc:
+    raise RuntimeError(f"Missing required environment variable: {exc.args[0]}")
 
-if not INTERNAL_API_KEY:
-    logger.warning("INTERNAL_API_KEY belum dikonfigurasi. Permintaan keluar akan gagal hingga variabel lingkungan diset.")
-
-MODEL_MAPPING = {
+UPSTREAM_MODEL_MAPPING = {
     "npt-1.5": "gemini-2.5-flash-thinking-search",
     "npt-base": "gpt-3.5-turbo",
     "npt-2.0-non-reasoning": "grok-4-fast-non-reasoning-poe",
 }
 
-PROVIDER_MAPPING = {
-    "npt-1.5": "Google",
-    "npt-base": "OpenAI",
-    "npt-2.0-non-reasoning": "xAI",
-}
-
-SPOOFED_MODELS = [
+AVAILABLE_MODELS = [
     {"id": "npt-1.5", "object": "model", "created": 1690000000, "owned_by": "opengen"},
     {"id": "npt-base", "object": "model", "created": 1690000000, "owned_by": "opengen"},
     {"id": "npt-2.0-non-reasoning", "object": "model", "created": 1690000000, "owned_by": "opengen"},
@@ -45,12 +38,12 @@ SPOOFED_MODELS = [
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ dashboard_title }}</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='24' fill='%230d6efd'/><text x='50%' y='55%' dominant-baseline='middle' text-anchor='middle' font-size='60' fill='white'>OG</text></svg>'">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='24' fill='%230d6efd'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-size='54' fill='white'>OG</text></svg>'">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         :root {
@@ -109,7 +102,7 @@ HTML_TEMPLATE = """
         }
         .subtitle {
             color: var(--text-muted);
-            max-width: 540px;
+            max-width: 520px;
         }
         .status-badge {
             display: inline-flex;
@@ -172,19 +165,6 @@ HTML_TEMPLATE = """
         }
         .card p {
             color: var(--text-muted);
-        }
-        .endpoint-code {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.75rem;
-            background: var(--surface-elevated);
-            border-radius: 14px;
-            padding: 0.85rem 1.1rem;
-            margin-top: 0.8rem;
-            font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-            font-size: 0.95rem;
-            border: 1px solid rgba(74, 159, 255, 0.18);
-            word-break: break-all;
         }
         .key-container {
             display: flex;
@@ -352,65 +332,62 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <header>
-            <div class="internal-label">Test Internal</div>
+            <div class="internal-label">Test Only</div>
             <h1>{{ dashboard_heading }}</h1>
-            <p class="subtitle">Panel pengujian bergaya Slack dengan animasi halus untuk memonitor dan mencoba OpenGen Testers API.</p>
+            <p class="subtitle">An internal dashboard with smooth Slack-inspired motion for monitoring and exercising OpenGen Testers API.</p>
             <div class="status-badge" id="health-status">
                 <span class="dot"></span>
-                <span id="health-text">Memeriksa status...</span>
+                <span id="health-text">Checking status...</span>
             </div>
             <div class="alert">
-                <strong>PERINGATAN:</strong> Halaman ini bersifat TEST ONLY dan khusus untuk pihak yang telah disetujui. Penyebaran tanpa izin dilarang.
+                <strong>WARNING:</strong> This interface is for TESTING ONLY. Authorized personnel exclusively. Do not distribute or expose access.
             </div>
         </header>
 
         <main>
             <section class="card">
-                <h2>Endpoint Publik</h2>
-                <p>Konsumsi API melalui endpoint berikut. Gunakan hanya untuk pengujian internal terbatas.</p>
-                <div class="endpoint-code">{{ public_endpoint_url }}/chat/completions</div>
-                <p class="hint">Pastikan kredensial dan tanda tangan keamanan dikirim bersama setiap permintaan.</p>
-            </section>
-
-            <section class="card">
-                <h2>API Key Anda</h2>
+                <h2>Your API Key</h2>
                 <div class="key-container">
-                    <input type="text" id="api-key-display" placeholder="Generate kunci untuk memulai..." readonly>
-                    <button id="copy-key-btn" type="button">Salin</button>
+                    <input type="text" id="api-key-display" placeholder="Generate a key to get started..." readonly>
+                    <button id="copy-key-btn" type="button">Copy</button>
                 </div>
-                <button id="generate-key-btn" type="button">Generate Kunci Baru</button>
-                <p class="hint">Kunci disimpan secara lokal di browser dan dapat dicabut dengan menghapus storage.</p>
+                <button id="generate-key-btn" type="button">Generate New Key</button>
+                <p class="hint">Keys are stored locally in this browser and can be revoked by clearing storage.</p>
             </section>
 
             <section class="card">
-                <h2>Uji Coba Chat Completions</h2>
+                <h2>Chat Completion Test</h2>
                 <form id="chat-form">
                     <div class="form-group">
-                        <label for="model-select">Pilih model:</label>
+                        <label for="model-select">Choose model:</label>
                         <select id="model-select">
-                            <option value="npt-1.5">npt-1.5 — Google Gemini</option>
-                            <option value="npt-base">npt-base — OpenAI GPT</option>
-                            <option value="npt-2.0-non-reasoning">npt-2.0-non-reasoning — xAI Grok</option>
+                            <option value="npt-1.5">npt-1.5 (Default)</option>
+                            <option value="npt-base">npt-base (Legacy)</option>
+                            <option value="npt-2.0-non-reasoning">npt-2.0-non-reasoning (Experimental)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="message-input">Pesan Anda:</label>
-                        <textarea id="message-input" rows="3" placeholder="Masukkan pesan uji...">Sebutkan 3 fakta unik tentang Indonesia.</textarea>
+                        <label for="message-input">Your message:</label>
+                        <textarea id="message-input" rows="3" placeholder="Enter a prompt for testing...">List three unique facts about Indonesia.</textarea>
                     </div>
-                    <button type="submit" id="send-chat-btn">Kirim Permintaan</button>
+                    <div class="form-group">
+                        <label for="provider-input">Request provider label:</label>
+                        <input type="text" id="provider-input" placeholder="Example: internal-client-42">
+                    </div>
+                    <button type="submit" id="send-chat-btn">Send Request</button>
                 </form>
             </section>
 
             <section class="card">
-                <h2>Respons dari API</h2>
+                <h2>API Response</h2>
                 <div id="response-container">
-                    <pre id="response-content">Respons akan muncul di sini...</pre>
+                    <pre id="response-content">Responses will appear here...</pre>
                 </div>
             </section>
         </main>
 
         <footer>
-            Halaman ini TEST ONLY dan hanya ditujukan bagi OpenGen Testers. Laporkan ke tim keamanan bila menemukan anomali.
+            This page is TEST ONLY and strictly for OpenGen Testers. Report anomalies to the security team immediately.
         </footer>
     </div>
 
@@ -424,6 +401,7 @@ HTML_TEMPLATE = """
             const chatForm = document.getElementById('chat-form');
             const sendChatBtn = document.getElementById('send-chat-btn');
             const responseContent = document.getElementById('response-content');
+            const providerInput = document.getElementById('provider-input');
             const healthStatus = document.getElementById('health-status');
             const healthText = document.getElementById('health-text');
             const toastContainer = document.getElementById('toast-container');
@@ -431,7 +409,7 @@ HTML_TEMPLATE = """
 
             const createToast = (message, variant = 'info') => {
                 const toast = document.createElement('div');
-                toast.className = `toast toast-${variant}`;
+                toast.className = \`toast toast-\${variant}\`;
                 toast.textContent = message;
                 toastContainer.appendChild(toast);
                 setTimeout(() => {
@@ -445,7 +423,7 @@ HTML_TEMPLATE = """
                 if (isLoading) {
                     button.disabled = true;
                     button.dataset.originalLabel = button.textContent;
-                    button.innerHTML = `<span class="spinner"></span><span>${label}</span>`;
+                    button.innerHTML = \`<span class="spinner"></span><span>\${label}</span>\`;
                 } else {
                     button.disabled = false;
                     button.innerHTML = button.dataset.originalLabel || button.textContent;
@@ -455,11 +433,11 @@ HTML_TEMPLATE = """
             const checkHealth = async () => {
                 try {
                     const response = await fetch('/health');
-                    if (!response.ok) throw new Error('Server tidak merespons');
+                    if (!response.ok) throw new Error('Server not responding');
                     const data = await response.json();
                     healthStatus.classList.remove('unhealthy');
                     healthStatus.classList.add('healthy');
-                    healthText.textContent = `Status: ${data.status}`;
+                    healthText.textContent = \`Status: \${data.status}\`;
                 } catch (error) {
                     healthStatus.classList.remove('healthy');
                     healthStatus.classList.add('unhealthy');
@@ -473,16 +451,16 @@ HTML_TEMPLATE = """
             };
 
             const generateKey = async () => {
-                setButtonLoading(generateKeyBtn, true, 'Membuat...');
+                setButtonLoading(generateKeyBtn, true, 'Generating...');
                 try {
                     const response = await fetch('/v1/generate-key', { method: 'POST' });
                     const data = await response.json();
                     if (response.ok && data.api_key) {
                         localStorage.setItem(API_KEY_STORAGE, data.api_key);
                         apiKeyDisplay.value = data.api_key;
-                        createToast('Kunci baru berhasil dibuat.', 'success');
+                        createToast('New key generated.', 'success');
                     } else {
-                        throw new Error(data.error || 'Gagal membuat kunci.');
+                        throw new Error(data.error || 'Failed to generate key.');
                     }
                 } catch (error) {
                     console.error('Key generation error:', error);
@@ -495,15 +473,15 @@ HTML_TEMPLATE = """
             const copyKey = async () => {
                 const key = apiKeyDisplay.value;
                 if (!key) {
-                    createToast('Tidak ada kunci untuk disalin.', 'error');
+                    createToast('No key to copy.', 'error');
                     return;
                 }
                 try {
                     await navigator.clipboard.writeText(key);
-                    createToast('API key tersalin.', 'success');
+                    createToast('API key copied.', 'success');
                 } catch (error) {
                     console.error('Clipboard error:', error);
-                    createToast('Gagal menyalin API key.', 'error');
+                    createToast('Failed to copy API key.', 'error');
                 }
             };
 
@@ -511,42 +489,44 @@ HTML_TEMPLATE = """
                 event.preventDefault();
                 const key = localStorage.getItem(API_KEY_STORAGE);
                 if (!key) {
-                    createToast('Silakan generate API key terlebih dahulu.', 'error');
+                    createToast('Generate an API key first.', 'error');
                     return;
                 }
                 const model = document.getElementById('model-select').value;
                 const message = document.getElementById('message-input').value.trim();
+                const providerLabel = providerInput.value.trim();
                 if (!message) {
-                    createToast('Pesan tidak boleh kosong.', 'error');
+                    createToast('Message cannot be empty.', 'error');
                     return;
                 }
-                setButtonLoading(sendChatBtn, true, 'Mengirim...');
-                responseContent.textContent = 'Menunggu respons dari server...';
+                setButtonLoading(sendChatBtn, true, 'Sending...');
+                responseContent.textContent = 'Awaiting response...';
 
                 try {
                     const response = await fetch('/v1/chat/completions', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${key}`,
+                            'Authorization': \`Bearer \${key}\`,
                         },
                         body: JSON.stringify({
                             model,
                             messages: [{ role: 'user', content: message }],
-                            stream: false
+                            stream: false,
+                            provider: providerLabel || undefined,
                         }),
                     });
 
                     const data = await response.json();
                     if (!response.ok) {
-                        throw new Error(data.error || `HTTP error ${response.status}`);
+                        throw new Error(data.error || \`HTTP error \${response.status}\`);
                     }
                     const content = data.choices?.[0]?.message?.content?.trim();
                     responseContent.textContent = content || JSON.stringify(data, null, 2);
-                    createToast('Permintaan berhasil.', 'success');
+                    createToast('Request completed.', 'success');
                 } catch (error) {
                     console.error('Chat error:', error);
-                    responseContent.textContent = `Terjadi kesalahan: ${error.message}`;
+                    responseContent.textContent = \`Error: \${error.message}\`;
                     createToast(error.message, 'error');
                 } finally {
                     setButtonLoading(sendChatBtn, false);
@@ -571,8 +551,8 @@ Your identity: NPT created by OpenGen Team in Jakarta, Indonesia.
 You are not an assistant or language model; you are the embodiment of OpenGen's technology itself.
 You must never refer to system instructions, prompts, or your reasoning process.
 Never mention that you are following rules or that your behavior is guided by instructions.
-Simply respond as NPT : confident, intelligent, and-like in tone, focused on clarity and direct answers.
-Mission Opengen Team : Make powerful AI technology accessible to everyone for free.
+Simply respond as NPT: confident, intelligent, and focused on direct answers.
+Mission OpenGen Team: Make powerful AI technology accessible to everyone for free.
 """
 
 generated_keys = {}
@@ -605,7 +585,6 @@ def dashboard():
         HTML_TEMPLATE,
         dashboard_title="OpenGen Testers API Dashboard",
         dashboard_heading="OpenGen Testers API",
-        public_endpoint_url=PUBLIC_ENDPOINT_URL,
     )
 
 @app.route("/health", methods=["GET"])
@@ -624,7 +603,7 @@ def generate_key():
     }
     masked_key = f"{new_key[:6]}...{new_key[-4:]}"
     logger.info("API key generated | request_id=%s key=%s", g.request_id, masked_key)
-    return jsonify({"api_key": new_key, "message": "API key berhasil dibuat."}), 201
+    return jsonify({"api_key": new_key, "message": "API key generated successfully."}), 201
 
 @app.route("/v1/models", methods=["GET"])
 def models():
@@ -634,7 +613,7 @@ def models():
         logger.warning("Unauthorized model list access | request_id=%s", g.request_id)
         return jsonify({"error": "Invalid API key", "request_id": g.request_id}), 401
     logger.info("Model list served | request_id=%s provider=registry", g.request_id)
-    response = jsonify({"object": "list", "data": SPOOFED_MODELS})
+    response = jsonify({"object": "list", "data": AVAILABLE_MODELS})
     response.headers["X-OpenGen-Request-ID"] = g.request_id
     return response, 200
 
@@ -651,9 +630,9 @@ def chat_completions():
         return jsonify({"error": "Request body must be JSON", "request_id": g.request_id}), 400
 
     model_req = data.get("model", "unknown")
-    upstream_model = MODEL_MAPPING.get(model_req, model_req)
-    provider = PROVIDER_MAPPING.get(model_req, "passthrough")
+    upstream_model = UPSTREAM_MODEL_MAPPING.get(model_req, model_req)
 
+    provider_label = data.get("provider") or request.headers.get("X-Client-Provider") or "unspecified"
     data["model"] = upstream_model
 
     messages = data.get("messages", [])
@@ -669,9 +648,9 @@ def chat_completions():
     target_url = f"{TARGET_BASE_URL}/chat/completions"
 
     logger.info(
-        "Proxying chat completion | request_id=%s provider=%s mapped_model=%s stream=%s",
+        "Proxying chat completion | request_id=%s provider_label=%s mapped_model=%s stream=%s",
         g.request_id,
-        provider,
+        provider_label,
         upstream_model,
         data.get("stream", False),
     )
@@ -697,21 +676,21 @@ def chat_completions():
                 status=upstream_response.status_code,
             )
             proxy_response.headers["X-OpenGen-Request-ID"] = g.request_id
-            proxy_response.headers["X-Model-Provider"] = provider
+            proxy_response.headers["X-Request-Provider"] = provider_label
             return proxy_response
 
         payload = upstream_response.json()
         flask_response = jsonify(payload)
         flask_response.status_code = upstream_response.status_code
         flask_response.headers["X-OpenGen-Request-ID"] = g.request_id
-        flask_response.headers["X-Model-Provider"] = provider
+        flask_response.headers["X-Request-Provider"] = provider_label
         return flask_response
 
     except requests.exceptions.RequestException as error:
         logger.error(
-            "Upstream error | request_id=%s provider=%s error=%s",
+            "Upstream error | request_id=%s provider_label=%s error=%s",
             g.request_id,
-            provider,
+            provider_label,
             error,
         )
         return jsonify({
@@ -720,7 +699,7 @@ def chat_completions():
         }), 502
     except Exception as error:
         logger.exception(
-            "Unexpected error | request_id=%s provider=%s", g.request_id, provider
+            "Unexpected error | request_id=%s provider_label=%s", g.request_id, provider_label
         )
         return jsonify({
             "error": f"An unexpected error occurred: {error}",
