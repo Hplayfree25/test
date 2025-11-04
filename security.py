@@ -28,7 +28,7 @@ class RateLimiter:
                 bucket.popleft()
             if len(bucket) >= self.max_requests:
                 raise SecurityException(
-                    "Terlalu banyak permintaan. Coba ulangi beberapa saat lagi.",
+                    "Too many requests. Please retry later.",
                     status_code=429,
                     code="rate_limited",
                 )
@@ -56,7 +56,7 @@ class SecurityManager:
     def _enforce_https(self, flask_request):
         scheme = flask_request.headers.get("X-Forwarded-Proto", flask_request.scheme)
         if self.require_https and scheme != "https":
-            raise SecurityException("HTTPS wajib digunakan untuk endpoint ini.", code="https_required")
+            raise SecurityException("HTTPS is required for this endpoint.", code="https_required")
 
     def _enforce_ip_allowlist(self, flask_request):
         if not self.allowed_ips:
@@ -66,20 +66,20 @@ class SecurityManager:
         candidates = {ip.strip() for ip in forwarded_for.split(",") if ip.strip()}
         candidates.add(remote_addr)
         if not candidates.intersection(self.allowed_ips):
-            raise SecurityException("Alamat IP tidak diizinkan.", code="ip_not_allowed")
+            raise SecurityException("IP address is not allowed.", code="ip_not_allowed")
 
     def _verify_signature(self, flask_request):
         signature = flask_request.headers.get("X-Internal-Signature")
         timestamp_header = flask_request.headers.get("X-Internal-Timestamp")
         if not signature or not timestamp_header:
-            raise SecurityException("Header keamanan tidak lengkap.", status_code=401, code="signature_missing")
+            raise SecurityException("Security headers are missing.", status_code=401, code="signature_missing")
         try:
             timestamp = int(timestamp_header)
         except ValueError as exc:
-            raise SecurityException("Timestamp tidak valid.", status_code=401, code="timestamp_invalid") from exc
+            raise SecurityException("Timestamp header is invalid.", status_code=401, code="timestamp_invalid") from exc
         now = int(time.time())
         if abs(now - timestamp) > self.timestamp_tolerance:
-            raise SecurityException("Timestamp melebihi toleransi keamanan.", status_code=401, code="timestamp_out_of_range")
+            raise SecurityException("Timestamp is outside the allowed tolerance.", status_code=401, code="timestamp_out_of_range")
         body = flask_request.get_data(cache=True) or b""
         payload = f"{timestamp}.{body.decode('utf-8')}".encode("utf-8")
         expected_signature = hmac.new(
@@ -88,7 +88,7 @@ class SecurityManager:
             hashlib.sha256,
         ).hexdigest()
         if not hmac.compare_digest(signature, expected_signature):
-            raise SecurityException("Signature tidak valid.", status_code=401, code="signature_invalid")
+            raise SecurityException("Signature validation failed.", status_code=401, code="signature_invalid")
 
     def _derive_client_identifier(self, flask_request) -> str:
         authorization = flask_request.headers.get("Authorization", "").strip()
