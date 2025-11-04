@@ -4,7 +4,14 @@ import os
 import secrets
 
 import requests
-from flask import Flask, request, jsonify, stream_with_context, render_template_string, g
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    stream_with_context,
+    render_template_string,
+    g,
+)
 from flask_cors import CORS
 
 from security import security_manager, SecurityException
@@ -23,6 +30,8 @@ try:
     INTERNAL_API_KEY = os.environ["INTERNAL_API_KEY"]
 except KeyError as exc:
     raise RuntimeError(f"Missing required environment variable: {exc.args[0]}")
+
+PUBLIC_ENDPOINT_URL = os.environ.get("PUBLIC_ENDPOINT_URL", "").strip()
 
 UPSTREAM_MODEL_MAPPING = {
     "npt-1.5": "gemini-2.5-flash-thinking-search",
@@ -85,24 +94,10 @@ HTML_TEMPLATE = """
             gap: 1.2rem;
             align-items: center;
         }
-        .internal-label {
-            text-transform: uppercase;
-            letter-spacing: 0.4em;
-            font-size: 0.75rem;
-            background: rgba(74, 159, 255, 0.08);
-            color: var(--primary-color);
-            padding: 0.4rem 1rem;
-            border-radius: 999px;
-            border: 1px solid rgba(74, 159, 255, 0.22);
-        }
         header h1 {
             font-size: clamp(2rem, 4vw, 2.75rem);
             font-weight: 700;
             margin: 0;
-        }
-        .subtitle {
-            color: var(--text-muted);
-            max-width: 520px;
         }
         .status-badge {
             display: inline-flex;
@@ -141,10 +136,7 @@ HTML_TEMPLATE = """
             border-radius: 18px;
             max-width: 620px;
         }
-        main {
-            display: grid;
-            gap: 1.6rem;
-        }
+        main { display: grid; gap: 1.6rem; }
         .card {
             background: var(--surface-color);
             border: 1px solid var(--border-color);
@@ -163,8 +155,19 @@ HTML_TEMPLATE = """
             font-size: 1.25rem;
             font-weight: 600;
         }
-        .card p {
-            color: var(--text-muted);
+        .card p { color: var(--text-muted); }
+        .endpoint-code {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            background: var(--surface-elevated);
+            border-radius: 14px;
+            padding: 0.85rem 1.1rem;
+            margin-top: 0.8rem;
+            font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+            font-size: 0.95rem;
+            border: 1px solid rgba(74, 159, 255, 0.18);
+            word-break: break-all;
         }
         .key-container {
             display: flex;
@@ -230,10 +233,7 @@ HTML_TEMPLATE = """
             gap: 0.55rem;
             margin-bottom: 1.2rem;
         }
-        label {
-            font-weight: 500;
-            color: var(--text-color);
-        }
+        label { font-weight: 500; color: var(--text-color); }
         #response-container {
             background: #0a0f16;
             border-radius: 14px;
@@ -285,11 +285,7 @@ HTML_TEMPLATE = """
         }
         .toast-success { border-color: rgba(49, 196, 141, 0.5); }
         .toast-error { border-color: rgba(255, 114, 98, 0.5); }
-        .spinner {
-            position: relative;
-            width: 16px;
-            height: 16px;
-        }
+        .spinner { position: relative; width: 16px; height: 16px; }
         .spinner::before {
             content: "";
             position: absolute;
@@ -299,25 +295,15 @@ HTML_TEMPLATE = """
             border-top-color: transparent;
             animation: spin 0.8s linear infinite;
         }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes slideUp {
-            from { opacity: 0; transform: translateY(24px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes toastIn {
-            to { opacity: 1; transform: translateY(0); }
-        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
         @keyframes pulse {
             0% { box-shadow: 0 0 0 0 rgba(255, 189, 89, 0.35); }
             70% { box-shadow: 0 0 0 12px rgba(255, 189, 89, 0); }
             100% { box-shadow: 0 0 0 0 rgba(255, 189, 89, 0); }
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         @media (max-width: 640px) {
             body { padding: 1.75rem 1.1rem 2.4rem; }
             .card { padding: 1.4rem; }
@@ -332,9 +318,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <header>
-            <div class="internal-label">Test Only</div>
             <h1>{{ dashboard_heading }}</h1>
-            <p class="subtitle">An internal dashboard with smooth Slack-inspired motion for monitoring and exercising OpenGen Testers API.</p>
             <div class="status-badge" id="health-status">
                 <span class="dot"></span>
                 <span id="health-text">Checking status...</span>
@@ -345,6 +329,14 @@ HTML_TEMPLATE = """
         </header>
 
         <main>
+            {% if public_endpoint_url %}
+            <section class="card">
+                <h2>Configured Endpoint</h2>
+                <p>Use this URL when integrating with OpenGen Testers API. Keep it confidential.</p>
+                <div class="endpoint-code">{{ public_endpoint_url }}/chat/completions</div>
+            </section>
+            {% endif %}
+
             <section class="card">
                 <h2>Your API Key</h2>
                 <div class="key-container">
@@ -357,7 +349,7 @@ HTML_TEMPLATE = """
 
             <section class="card">
                 <h2>Chat Completion Test</h2>
-                <form id="chat-form">
+                <form id="chat-form" autocomplete="off">
                     <div class="form-group">
                         <label for="model-select">Choose model:</label>
                         <select id="model-select">
@@ -409,7 +401,7 @@ HTML_TEMPLATE = """
 
             const createToast = (message, variant = 'info') => {
                 const toast = document.createElement('div');
-                toast.className = \`toast toast-\${variant}\`;
+                toast.className = `toast toast-${variant}`;
                 toast.textContent = message;
                 toastContainer.appendChild(toast);
                 setTimeout(() => {
@@ -423,21 +415,21 @@ HTML_TEMPLATE = """
                 if (isLoading) {
                     button.disabled = true;
                     button.dataset.originalLabel = button.textContent;
-                    button.innerHTML = \`<span class="spinner"></span><span>\${label}</span>\`;
+                    button.innerHTML = `<span class="spinner"></span><span>${label}</span>`;
                 } else {
                     button.disabled = false;
-                    button.innerHTML = button.dataset.originalLabel || button.textContent;
+                    button.textContent = button.dataset.originalLabel || button.textContent;
                 }
             };
 
             const checkHealth = async () => {
                 try {
-                    const response = await fetch('/health');
+                    const response = await fetch('/health', { credentials: 'same-origin' });
                     if (!response.ok) throw new Error('Server not responding');
                     const data = await response.json();
                     healthStatus.classList.remove('unhealthy');
                     healthStatus.classList.add('healthy');
-                    healthText.textContent = \`Status: \${data.status}\`;
+                    healthText.textContent = `Status: ${data.status}`;
                 } catch (error) {
                     healthStatus.classList.remove('healthy');
                     healthStatus.classList.add('unhealthy');
@@ -453,7 +445,10 @@ HTML_TEMPLATE = """
             const generateKey = async () => {
                 setButtonLoading(generateKeyBtn, true, 'Generating...');
                 try {
-                    const response = await fetch('/v1/generate-key', { method: 'POST' });
+                    const response = await fetch('/v1/generate-key', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                    });
                     const data = await response.json();
                     if (response.ok && data.api_key) {
                         localStorage.setItem(API_KEY_STORAGE, data.api_key);
@@ -503,12 +498,18 @@ HTML_TEMPLATE = """
                 responseContent.textContent = 'Awaiting response...';
 
                 try {
+                    const headers = {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${key}`,
+                    };
+                    if (providerLabel) {
+                        headers['X-Client-Provider'] = providerLabel;
+                    }
+
                     const response = await fetch('/v1/chat/completions', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': \`Bearer \${key}\`,
-                        },
+                        credentials: 'same-origin',
+                        headers,
                         body: JSON.stringify({
                             model,
                             messages: [{ role: 'user', content: message }],
@@ -519,14 +520,14 @@ HTML_TEMPLATE = """
 
                     const data = await response.json();
                     if (!response.ok) {
-                        throw new Error(data.error || \`HTTP error \${response.status}\`);
+                        throw new Error(data.error || `HTTP error ${response.status}`);
                     }
                     const content = data.choices?.[0]?.message?.content?.trim();
                     responseContent.textContent = content || JSON.stringify(data, null, 2);
                     createToast('Request completed.', 'success');
                 } catch (error) {
                     console.error('Chat error:', error);
-                    responseContent.textContent = \`Error: \${error.message}\`;
+                    responseContent.textContent = `Error: ${error.message}`;
                     createToast(error.message, 'error');
                 } finally {
                     setButtonLoading(sendChatBtn, false);
@@ -585,6 +586,7 @@ def dashboard():
         HTML_TEMPLATE,
         dashboard_title="OpenGen Testers API Dashboard",
         dashboard_heading="OpenGen Testers API",
+        public_endpoint_url=PUBLIC_ENDPOINT_URL,
     )
 
 @app.route("/health", methods=["GET"])
@@ -632,7 +634,11 @@ def chat_completions():
     model_req = data.get("model", "unknown")
     upstream_model = UPSTREAM_MODEL_MAPPING.get(model_req, model_req)
 
-    provider_label = data.get("provider") or request.headers.get("X-Client-Provider") or "unspecified"
+    provider_label = (
+        data.get("provider")
+        or request.headers.get("X-Client-Provider")
+        or "unspecified"
+    )
     data["model"] = upstream_model
 
     messages = data.get("messages", [])
